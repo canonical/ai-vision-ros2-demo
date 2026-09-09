@@ -49,9 +49,7 @@ ENGINE_DIR="${OWL_ENGINE_DIR:-$SNAP_COMMON/trt_engines}"
 mkdir -p "$HF_HOME" "$ENGINE_DIR"
 
 # Seed the bundled prebuilt engine (if any) on first run so a matching device
-# skips the ~1-2 min build and gets instant TensorRT inference. -n (no-clobber)
-# means a locally-rebuilt engine always wins; and owl_detect_node deletes +
-# rebuilds any engine that fails to load, so a stale bundled engine is harmless.
+# skips the ~1-2 min build and gets instant TensorRT inference.
 if [ -d "$SNAP/prebuilt_engines" ]; then
   cp -an "$SNAP/prebuilt_engines/." "$ENGINE_DIR/" 2>/dev/null || true
 fi

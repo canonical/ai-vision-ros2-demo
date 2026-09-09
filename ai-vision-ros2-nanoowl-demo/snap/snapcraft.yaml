@@ -44,32 +44,25 @@ architectures:
   - build-on: [arm64]
     build-for: [arm64]
 
-# JetPack 6.x (L4T r36.x) userspace libraries + Canonical's ubuntu-tegra PPA
-# (the ACTUAL source of the Tegra GPU driver userspace shims). Identical to the
-# depth NVIDIA variant so the two channels stage the same CUDA/TensorRT runtime.
+# JetPack 6.x (L4T r36.x) userspace libraries. The snap gets its CUDA / cuDNN
+# / TensorRT runtime from NVIDIA's repos (matching the on-device JetPack).
 package-repositories:
   - type: apt
     components: [main]
-    suites: [r36.4]
+    suites: [r36.5]
     key-id: 3C6D1FF3100C8C3ABB0869C0E6543461A9996195
     key-server: https://repo.download.nvidia.com/jetson/jetson-ota-public.asc
     url: https://repo.download.nvidia.com/jetson/t234
     architectures: [arm64]
   - type: apt
     components: [main]
-    suites: [r36.4]
+    suites: [r36.5]
     key-id: 3C6D1FF3100C8C3ABB0869C0E6543461A9996195
     key-server: https://repo.download.nvidia.com/jetson/jetson-ota-public.asc
     url: https://repo.download.nvidia.com/jetson/common
     architectures: [arm64]
-  - type: apt
-    ppa: ubuntu-tegra/updates
 
 apps:
-  # Shared app/service name with the depth variant so `snap services
-  # ai-vision-ros2` / the systemd unit stay identically named across a
-  # `snap refresh --channel=...` swap, even though the two variants are
-  # completely different ROS packages under the hood.
   perception:
     extensions: [ros2-humble-ros-base]
     command: usr/bin/owldetect-launch
@@ -112,6 +105,7 @@ parts:
       - libopenblas0-pthread
       - cuda-cudart-12-6
       - libcublas-12-6
+      - libcudla-12-6
       - libcufft-12-6
       - libcurand-12-6
       - libcusparse-12-6
@@ -126,7 +120,8 @@ parts:
       - libnvinfer-bin
       - python3-libnvinfer
       # NOTE: the Tegra driver shim libs (libcuda.so.1, libnvcudla.so, ...) come
-      # from the ubuntu-tegra PPA and are staged by the gpu-driver part below.
+      # from NVIDIA's own Jetson apt repo (nvidia-l4t-core/-cuda/-dla-compiler)
+      # and are staged by the gpu-driver part below.
     build-packages:
       - python3-pip
       - git
@@ -185,15 +180,6 @@ parts:
       craftctl default
       chmod +x "${CRAFT_PART_INSTALL}/owldetect-launch"
 
-  # cuDLA runtime: libcudla.so.1 is a load-time dependency of
-  # libnvinfer_plugin.so.10, which trtexec (and TensorRT at large) dlopens when
-  # building/loading the OWL image-encoder engine. Kept in its own part so
-  # adding it doesn't invalidate/rebuild the heavy owl-demo (torch) part.
-  cuda-extra:
-    plugin: nil
-    stage-packages:
-      - libcudla-12-6
-
   # Prebuilt TensorRT engine for the OWL image encoder, shipped read-only in the
   # snap and seeded into $SNAP_COMMON/trt_engines on first run by
   # owldetect-launch.
@@ -203,38 +189,11 @@ parts:
     organize:
       "*": prebuilt_engines/
 
-  # Tegra GPU driver user-space shims (libcuda, libnvcudla, libnvdla_*,
-  # libnvrm_*, libnvcucompat, libnvsciipc, ...) sourced from Canonical's
-  # ubuntu-tegra PPA. Kernel-driver-matched, can't be reached from a strict snap
-  # at runtime, so staged here.
-  #
-  # VERSION PIN: these shims must match the running nvgpu kernel driver. If the
-  # Jetson's driver updates, bump TEGRA_VER to match
-  # `dpkg-query -W nvidia-tegra-drivers-36-igpu-cuda` on the device.
+  # Tegra GPU driver user-space shims
+  # sourced directly from NVIDIA's own Jetson apt repo.
   gpu-driver:
     plugin: nil
-    override-build: |
-      set -eux
-      TEGRA_VER="36.5.20260115-0ubuntu1"
-      pkgs="nvidia-tegra-drivers-36-igpu-cuda nvidia-tegra-drivers-36-graphic nvidia-tegra-drivers-36-nvsci"
-      workdir="${CRAFT_PART_BUILD}/debs"
-      rm -rf "${workdir}"; mkdir -p "${workdir}"
-      cd "${workdir}"
-      for p in ${pkgs}; do
-        apt-get download "${p}=${TEGRA_VER}"
-      done
-      mkdir -p "${workdir}/x"
-      for d in *.deb; do dpkg-deb -x "${d}" "${workdir}/x"; done
-      src="${workdir}/x/usr/lib/aarch64-linux-gnu/nvidia"
-      dest="${CRAFT_PART_INSTALL}/usr/lib/aarch64-linux-gnu/nvidia"
-      mkdir -p "${dest}"
-      shims="libcuda libnvcucompat libnvcudla libnvdla_compiler libnvdla_runtime \
-             libnvos libnvrm_chip libnvrm_gpu libnvrm_host1x libnvrm_mem \
-             libnvrm_sync libnvsciipc libnvsocsys libnvtegrahv"
-      for base in ${shims}; do
-        cp -a "${src}/${base}.so"* "${dest}/" 2>/dev/null || true
-      done
-      for lib in libcuda.so.1 libnvcudla.so libnvcucompat.so libnvsciipc.so libnvdla_compiler.so; do
-        test -e "${dest}/${lib}" || { echo "MISSING driver shim: ${lib}" >&2; exit 1; }
-      done
-      echo "Staged Tegra driver shims ($(ls "${dest}" | wc -l) files, $(du -sh "${dest}" | cut -f1))"
+    stage-packages:
+      - nvidia-l4t-core
+      - nvidia-l4t-cuda
+      - nvidia-l4t-dla-compiler
