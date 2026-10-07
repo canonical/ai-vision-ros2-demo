@@ -8,7 +8,7 @@ channel refresh and **zero ROS-side restart**:
 | Channel | Built from | Behaviour |
 | --- | --- | --- |
 | `latest/nvidia/stable` | `so101_depth_demo/snap/snapcraft.yaml` | Depth Anything V2 (Small) proximity, ONNX Runtime **TensorRT EP** |
-| `latest/nvidia/edge` | `ai-vision-ros2-nanoowl-demo/snap/snapcraft.yaml` (external repo `jetson-nano-orin-nanoowl-snap`) | **NanoOWL (OWL-ViT) open-vocabulary** detection of a configurable text prompt (default `"a hand"`), image encoder on TensorRT via `torch2trt` |
+| `latest/nvidia/edge` | [`ai-vision-ros2-nanoowl-demo/snap/snapcraft.yaml`](../ai-vision-ros2-nanoowl-demo/snap/snapcraft.yaml) | **NanoOWL (OWL-ViT) open-vocabulary** detection of a configurable text prompt (default `"a hand"`), image encoder on TensorRT via `torch2trt` |
 
 ```bash
 snap refresh ai-vision-ros2 --channel=nvidia/stable   # -> depth proximity
@@ -27,7 +27,7 @@ so the enforcement nodes never change.
 
 ---
 
-## NanoOWL variant (`latest/nvidia/edge`, external repo `jetson-nano-orin-nanoowl-snap`)
+## NanoOWL variant (`latest/nvidia/edge`, `ai-vision-ros2-nanoowl-demo`)
 
 NanoOWL is **not** an ONNX Runtime model — OWL-ViT is an open-vocabulary,
 two-tower (image + text) detector, so this variant runs a PyTorch stack
@@ -77,7 +77,7 @@ Two hard constraints force this:
 2. **The `ros2-jazzy` extension is core24-only.** On core22 the only ROS 2
    content-sharing extension is `ros2-humble-ros-base`.
 
-This mirrors both reference snaps in this repo (`jetson-nano-orin-nanoowl-snap`,
+This mirrors both reference snaps in this repo (`ai-vision-ros2-nanoowl-demo`,
 and the upstream `snap-twin`), which are also core22/Py3.10 for the same reason.
 
 **Interop note (Humble ↔ Jazzy):** the depth node is pure `rclpy` +
@@ -120,8 +120,7 @@ that package dir), using snapcraft's conventional file names
 # Depth variant -> nvidia/stable  (this repo)
 cd so101_depth_demo   # project root for the snap is this package dir
 
-# NanoOWL variant -> nvidia/edge  (SEPARATE repo: jetson-nano-orin-nanoowl-snap,
-# branch feat/ai-vision-ros2-owl)
+# NanoOWL variant -> nvidia/edge  (this repo)
 cd ai-vision-ros2-nanoowl-demo   # project root for the snap is this package dir
 
 # Build (arm64 native on the Jetson). The ros2-humble-ros-base extension is
