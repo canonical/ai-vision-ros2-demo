@@ -1,0 +1,199 @@
+name: ai-vision-ros2
+base: core22
+version: '1.0.0-owl-nvidia'
+summary: NanoOWL (OWL-ViT) detection, NVIDIA Jetson TensorRT
+description: |
+  GPU open-vocabulary object detection for the SO-101 arm, on an NVIDIA Jetson
+  (Orin, JetPack 6.x). Subscribes to a ROS 2 image topic, runs NanoOWL
+  (OWL-ViT) for a configurable TEXT PROMPT (default "a hand") with its image
+  encoder accelerated by a TensorRT engine (torch2trt), and republishes an
+  annotated visualisation image (for viewing, with the safety ROI/trigger
+  overlaid), machine-readable detections (vision_msgs/Detection2DArray), and a
+  std_msgs/Bool protective-stop signal computed directly by this node (ROI
+  overlap on the prompt-matched detections + hysteresis debounce).
+
+  This is the NanoOWL variant of the "ai-vision-ros2" snap, published on the
+  latest/nvidia/edge channel. It is the open-vocabulary sibling of the depth
+  variant on latest/nvidia/stable (Depth Anything V2, so101_depth_demo) -- same
+  snap name, same `perception` service, same protective-stop contract, so you
+  swap the whole behaviour with a channel refresh and zero ROS-side restart:
+
+      snap refresh ai-vision-ros2 --channel=nvidia/stable   # -> depth proximity
+      snap refresh ai-vision-ros2 --channel=nvidia/edge      # -> NanoOWL prompt
+
+  The OWL-ViT weights are downloaded from Hugging Face on first run (cached in
+  $SNAP_COMMON/hf), and the TensorRT image-encoder engine is built ON-DEVICE on
+  first run (cached in $SNAP_COMMON/trt_engines). If the engine can't be built
+  the node falls back to a slower pure-torch image encoder.
+
+  Runs as an always-on daemon. Configure with `snap set`, e.g.:
+
+      snap set ai-vision-ros2 prompt="a hand"
+      snap set ai-vision-ros2 threshold=0.1
+      snap set ai-vision-ros2 input-image-topic=/my/camera/image_raw
+
+  Requires JetPack 6.x on the target and the GPU interfaces connected (see
+  docs/ai_vision_ros2_nvidia.md). Check status with
+  `snap services ai-vision-ros2` / `snap logs ai-vision-ros2`.
+
+grade: stable
+confinement: strict
+compression: lzo
+
+architectures:
+  - build-on: [arm64]
+    build-for: [arm64]
+
+# JetPack 6.x (L4T r36.x) userspace libraries. The snap gets its CUDA / cuDNN
+# / TensorRT runtime from NVIDIA's repos (matching the on-device JetPack).
+package-repositories:
+  - type: apt
+    components: [main]
+    suites: [r36.5]
+    key-id: 3C6D1FF3100C8C3ABB0869C0E6543461A9996195
+    key-server: https://repo.download.nvidia.com/jetson/jetson-ota-public.asc
+    url: https://repo.download.nvidia.com/jetson/t234
+    architectures: [arm64]
+  - type: apt
+    components: [main]
+    suites: [r36.5]
+    key-id: 3C6D1FF3100C8C3ABB0869C0E6543461A9996195
+    key-server: https://repo.download.nvidia.com/jetson/jetson-ota-public.asc
+    url: https://repo.download.nvidia.com/jetson/common
+    architectures: [arm64]
+
+apps:
+  perception:
+    extensions: [ros2-humble-ros-base]
+    command: usr/bin/owldetect-launch
+    daemon: simple
+    install-mode: disable
+    restart-condition: on-failure
+    restart-delay: 5s
+    environment:
+      # Library search path for CUDA / TensorRT / the torch stack.
+      LD_LIBRARY_PATH: "/usr/lib/aarch64-linux-gnu/nvidia:$SNAP/usr/local/cuda-12.6/targets/aarch64-linux/lib:$SNAP/usr/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH"
+      HF_HOME: $SNAP_COMMON/hf
+      OWL_ENGINE_DIR: $SNAP_COMMON/trt_engines
+    plugs:
+      - network
+      - network-bind
+      - hardware-observe
+      - opengl
+      - kernel-module-observe
+
+# Expose the staged Tegra driver shims at their real system path so CUDA finds
+# them via libcuda's RUNPATH, and expose trtexec at the hard-coded path NanoOWL
+# shells out to when building the image-encoder engine.
+layout:
+  /usr/lib/aarch64-linux-gnu/nvidia:
+    bind: $SNAP/usr/lib/aarch64-linux-gnu/nvidia
+  /usr/src/tensorrt/bin/trtexec:
+    bind-file: $SNAP/usr/src/tensorrt/bin/trtexec
+
+hooks:
+  configure: {}
+
+parts:
+  owl-demo:
+    plugin: colcon
+    source: .
+    stage-packages:
+      - libgomp1
+      - liblapack3
+      - libblas3
+      - libopenblas0-pthread
+      - cuda-cudart-12-6
+      - libcublas-12-6
+      - libcudla-12-6
+      - libcufft-12-6
+      - libcurand-12-6
+      - libcusparse-12-6
+      - libcusolver-12-6
+      - cuda-nvtx-12-6
+      - cuda-cupti-12-6
+      - libcufile-12-6
+      - libnvjitlink-12-6
+      - cuda-nvrtc-12-6
+      - libcudnn9-cuda-12
+      - tensorrt-libs
+      - libnvinfer-bin
+      - python3-libnvinfer
+      # NOTE: the Tegra driver shim libs (libcuda.so.1, libnvcudla.so, ...) come
+      # from NVIDIA's own Jetson apt repo (nvidia-l4t-core/-cuda/-dla-compiler)
+      # and are staged by the gpu-driver part below.
+    build-packages:
+      - python3-pip
+      - git
+    # colcon builds the ROS package; then install the NanoOWL / torch inference
+    # stack into the Debian dist-packages path.
+    override-build: |
+      craftctl default
+      TARGET="${CRAFT_PART_INSTALL}/usr/lib/python3/dist-packages"
+      pip3 install \
+        --ignore-installed \
+        --no-compile \
+        --target="$TARGET" \
+        "numpy<2" \
+        "pillow" \
+        "opencv-python-headless"
+      pip3 install \
+        --ignore-installed \
+        --no-compile \
+        --no-deps \
+        --target="$TARGET" \
+        "https://pypi.jetson-ai-lab.io/jp6/cu126/+f/62a/1beee9f2f1470/torch-2.8.0-cp310-cp310-linux_aarch64.whl#sha256=62a1beee9f2f147076a974d2942c90060c12771c94740830327cae705b2595fc" \
+        "https://pypi.jetson-ai-lab.io/jp6/cu126/+f/907/c4c1933789645/torchvision-0.23.0-cp310-cp310-linux_aarch64.whl#sha256=907c4c1933789645ebb20dd9181d40f8647978e6bd30086ae7b01febb937d2d1"
+      # torch's own pure-python deps (torch installed with --no-deps above).
+      pip3 install \
+        --ignore-installed \
+        --no-compile \
+        --target="$TARGET" \
+        "filelock" "sympy" "networkx" "jinja2" "fsspec" "typing_extensions"
+      # OWL-ViT (transformers) + onnx (torch.onnx.export) + nanoowl (trivial
+      # setup.py, no build-time torch import).
+      pip3 install \
+        --ignore-installed \
+        --no-compile \
+        --target="$TARGET" \
+        "transformers>=4.40,<4.50" \
+        "onnx"
+      pip3 install \
+        --ignore-installed \
+        --no-compile \
+        --no-deps \
+        --target="$TARGET" \
+        "git+https://github.com/NVIDIA-AI-IOT/nanoowl"
+      # torch2trt: pure-Python package only (no setup.py, no compiled plugins).
+      rm -rf "${CRAFT_PART_BUILD}/torch2trt-src"
+      git clone --depth 1 https://github.com/NVIDIA-AI-IOT/torch2trt "${CRAFT_PART_BUILD}/torch2trt-src"
+      rm -rf "$TARGET/torch2trt"
+      cp -r "${CRAFT_PART_BUILD}/torch2trt-src/torch2trt" "$TARGET/"
+
+  launcher:
+    plugin: dump
+    source: snap/local
+    organize:
+      owldetect-launch: usr/bin/owldetect-launch
+      fastdds_no_shared_memory.xml: usr/share/
+    override-build: |
+      craftctl default
+      chmod +x "${CRAFT_PART_INSTALL}/owldetect-launch"
+
+  # Prebuilt TensorRT engine for the OWL image encoder, shipped read-only in the
+  # snap and seeded into $SNAP_COMMON/trt_engines on first run by
+  # owldetect-launch.
+  prebuilt-engine:
+    plugin: dump
+    source: prebuilt_engines
+    organize:
+      "*": prebuilt_engines/
+
+  # Tegra GPU driver user-space shims
+  # sourced directly from NVIDIA's own Jetson apt repo.
+  gpu-driver:
+    plugin: nil
+    stage-packages:
+      - nvidia-l4t-core
+      - nvidia-l4t-cuda
+      - nvidia-l4t-dla-compiler

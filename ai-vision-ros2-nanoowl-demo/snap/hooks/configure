@@ -1,0 +1,131 @@
+#!/bin/bash
+# snap/hooks/configure
+#
+# Applies `snap set ai-vision-ros2 <key>=<value>` configuration for the
+# NanoOWL / Jetson open-vocabulary variant. Mirrors the depth NVIDIA variant's
+# configure hook. Renders $SNAP_DATA/params.yaml (ros__parameters for
+# owl_detect_node) and $SNAP_DATA/runtime.env (namespace/node-name/DDS
+# overrides for the launcher).
+#
+# See snap/local/owldetect-launch for the consumer side.
+set -e
+
+get() {
+  # $1 = key, $2 = default
+  val="$(snapctl get "$1")"
+  if [ -z "$val" ]; then
+    val="$2"
+  fi
+  printf '%s' "$val"
+}
+
+get_number() {
+  val="$(get "$1" "$2")"
+  case "$val" in
+    ''|*[!0-9.-]*)
+      echo "ai-vision-ros2 (nvidia owl): invalid number for $1: '$val'" >&2
+      exit 1
+      ;;
+  esac
+  printf '%s' "$val"
+}
+
+# The TensorRT image-encoder engine is built on-device on first run and cached
+# in $SNAP_COMMON (shared across revisions/channels, survives refresh). Not
+# user-settable; the node builds it here if missing.
+IMAGE_ENCODER_ENGINE="$SNAP_COMMON/trt_engines/owl_image_encoder_patch32.engine"
+
+INPUT_IMAGE_TOPIC="$(get input-image-topic /static_camera/image_raw)"
+# Subscribe to the compressed (JPEG) image by default -- far less DDS/transport
+# load than the raw frame (which can stall the feed under memory pressure).
+USE_COMPRESSED="$(get use-compressed true)"
+OUTPUT_IMAGE_TOPIC="$(get output-image-topic /camera/detections/visualization)"
+OUTPUT_DETECTIONS_TOPIC="$(get output-detections-topic /perception/detections)"
+
+# Open-vocabulary text prompt (comma-separated for multiple queries) + score
+# threshold. This is the whole point of the NanoOWL variant: type what should
+# be detected (and therefore what stops teleop) without rebuilding anything.
+PROMPT="$(get prompt "a hand")"
+THRESHOLD="$(get_number threshold 0.1)"
+OWL_MODEL="$(get owl-model google/owlvit-base-patch32)"
+MIN_PERIOD_S="$(get_number min-period-s 0.0)"
+
+# Protective-stop trigger logic (ROI overlap + hysteresis debounce over the
+# prompt-matched detections), computed directly by owl_detect_node itself.
+STOP_TOPIC="$(get stop-topic /safety/protective_stop)"
+# Live prompt-update topic (std_msgs/String): publish here to change the
+# detection prompt WITHOUT restarting the node (a `snap set prompt=...` restart
+# reloads torch + the TensorRT engine, ~15s; a topic publish re-encodes text in
+# milliseconds).
+PROMPT_TOPIC="$(get prompt-topic /perception/prompt)"
+ROI="$(get roi "0.25,0.2,0.75,0.85")"
+MIN_OVERLAP_RATIO="$(get_number min-overlap-ratio 0.2)"
+FRAMES_TO_BLOCK="$(get_number frames-to-block 2)"
+FRAMES_TO_CLEAR="$(get_number frames-to-clear 3)"
+
+NAMESPACE="$(get namespace "")"
+NODE_NAME="$(get node-name "")"
+ROS_DOMAIN_ID="$(get ros-domain-id "")"
+RMW_IMPLEMENTATION="$(get rmw-implementation "")"
+
+mkdir -p "$SNAP_DATA"
+mkdir -p "$SNAP_COMMON/trt_engines"
+
+# Prompt file watched live by owl_detect_node -> `snap set prompt=...` switches
+# the detected object WITHOUT a service restart (a restart would reload torch +
+# the TensorRT engine, ~15s). The node polls this file and re-encodes the text
+# prompt in milliseconds.
+PROMPT_FILE="$SNAP_DATA/prompt.txt"
+printf '%s' "$PROMPT" > "$PROMPT_FILE"
+
+{
+  echo "/**:"
+  echo "  ros__parameters:"
+  echo "    input_image_topic: \"$INPUT_IMAGE_TOPIC\""
+  echo "    use_compressed: $USE_COMPRESSED"
+  echo "    output_image_topic: \"$OUTPUT_IMAGE_TOPIC\""
+  echo "    output_detections_topic: \"$OUTPUT_DETECTIONS_TOPIC\""
+  echo "    prompt: \"$PROMPT\""
+  echo "    threshold: $THRESHOLD"
+  echo "    owl_model: \"$OWL_MODEL\""
+  echo "    image_encoder_engine: \"$IMAGE_ENCODER_ENGINE\""
+  echo "    min_period_s: $MIN_PERIOD_S"
+  echo "    stop_topic: \"$STOP_TOPIC\""
+  echo "    prompt_topic: \"$PROMPT_TOPIC\""
+  echo "    prompt_file: \"$PROMPT_FILE\""
+  echo "    roi: \"$ROI\""
+  echo "    min_overlap_ratio: $MIN_OVERLAP_RATIO"
+  echo "    frames_to_block: $FRAMES_TO_BLOCK"
+  echo "    frames_to_clear: $FRAMES_TO_CLEAR"
+} > "$SNAP_DATA/params.yaml"
+
+{
+  [ -n "$NAMESPACE" ] && echo "NAMESPACE=\"$NAMESPACE\""
+  [ -n "$NODE_NAME" ] && echo "NODE_NAME=\"$NODE_NAME\""
+  [ -n "$ROS_DOMAIN_ID" ] && echo "ROS_DOMAIN_ID=\"$ROS_DOMAIN_ID\""
+  [ -n "$RMW_IMPLEMENTATION" ] && echo "RMW_IMPLEMENTATION=\"$RMW_IMPLEMENTATION\""
+  true
+} > "$SNAP_DATA/runtime.env"
+
+snapctl set-health okay
+snapctl start --enable "$SNAP_NAME.perception" || true
+
+# Restart the service ONLY when something other than the (live-updatable) prompt
+# changed. A prompt-only change is picked up live via $PROMPT_FILE, so we skip
+# the ~15s reload. We detect this by signing every restart-relevant setting and
+# comparing to the last applied signature.
+SIG_FILE="$SNAP_DATA/.applied_sig"
+NEW_SIG="$(printf '%s\n' \
+  "$INPUT_IMAGE_TOPIC" "$USE_COMPRESSED" "$OUTPUT_IMAGE_TOPIC" "$OUTPUT_DETECTIONS_TOPIC" \
+  "$THRESHOLD" "$OWL_MODEL" "$IMAGE_ENCODER_ENGINE" "$MIN_PERIOD_S" \
+  "$STOP_TOPIC" "$PROMPT_TOPIC" "$ROI" "$MIN_OVERLAP_RATIO" \
+  "$FRAMES_TO_BLOCK" "$FRAMES_TO_CLEAR" \
+  "$NAMESPACE" "$NODE_NAME" "$ROS_DOMAIN_ID" "$RMW_IMPLEMENTATION" \
+  | md5sum | cut -d' ' -f1)"
+OLD_SIG="$(cat "$SIG_FILE" 2>/dev/null || true)"
+printf '%s' "$NEW_SIG" > "$SIG_FILE"
+
+if [ "$NEW_SIG" != "$OLD_SIG" ]; then
+  # First configure, or a non-prompt setting changed -> full restart.
+  snapctl restart "$SNAP_NAME.perception" || true
+fi

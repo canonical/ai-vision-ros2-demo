@@ -1,0 +1,4 @@
+# Device/TensorRT-version-specific engines are built on-device, not committed.
+prebuilt_engines/*.engine
+__pycache__/
+*.pyc
