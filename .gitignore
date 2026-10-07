@@ -1,0 +1,7 @@
+*.snap
+*.snap.tmp
+parts/
+stage/
+prime/
+__pycache__/
+*.pyc
