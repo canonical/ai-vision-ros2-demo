@@ -3,28 +3,21 @@ base: core24
 version: '1.0.0-owl-qualcomm'
 summary: OWL-ViT open-vocabulary detection on Qualcomm Hexagon NPU / QNN (ROS 2 Jazzy)
 description: |
-  Open-vocabulary object detection for the SO-101 arm, on a Qualcomm IQ-9075
-  EVK (or similar QRB/Snapdragon board running the Ubuntu-on-Qualcomm IoT
-  stack). Subscribes to a ROS 2 image topic, runs Qualcomm AI-Hub's OWL-ViT
-  (open-vocabulary detector, ViT-B/32 CLIP backbone) with ONNX Runtime's QNN
-  execution provider on the Hexagon NPU, and republishes an annotated
-  detection image (for viewing, with the safety ROI/trigger overlaid), a
-  vision_msgs/Detection2DArray of detections, and a std_msgs/Bool
-  protective-stop signal computed directly by this node (ROI overlap +
-  hysteresis debounce).
+  Open-vocabulary object detection, on a Qualcomm IQ-9075
+  EVK (or similar QRB/Snapdragon board). Subscribes to a ROS 2 image topic,
+  runs Qualcomm AI-Hub's OWL-ViT (open-vocabulary detector, ViT-B/32 CLIP
+  backbone) with ONNX Runtime's QNN execution provider on the Hexagon NPU,
+  and republishes an annotated detection image (for viewing, with the safety
+  ROI/trigger overlaid), a vision_msgs/Detection2DArray of detections, and a
+  std_msgs/Bool protective-stop signal computed directly by this node.
 
-  Unlike the fixed-class YOLO variant, OWL-ViT detects whatever free-form TEXT
-  PROMPT you give it (default "a hand"): the prompt is a live runtime input, so
+  OWL-ViT detects whatever free-form text prompts (default "a hand"):
+  the prompt is a live runtime input, so
   it can be swapped without reloading the model via a ROS topic or
-  `snap set ai-vision-ros2 prompt="a cup"`. This is the Qualcomm/NPU
-  counterpart of the Jetson-only NanoOWL variant -- same camera input, same
-  detection + protective-stop outputs, same ROI-overlap + hysteresis trigger,
-  different accelerator (QNN HTP instead of TensorRT).
+  `snap set ai-vision-ros2 prompt="a cup"`.
 
   This is the OWL-ViT Qualcomm variant of the "ai-vision-ros2" snap, published
-  on the latest/qualcomm/edge channel (the depth variant is on
-  latest/qualcomm/stable) -- same snap name, same `perception` service, so the
-  channel-swap story is preserved per architecture.
+  on the latest/qualcomm/edge channel.
 
   The bundled Qualcomm AI-Hub OWL-ViT ONNX is w8a16-quantised with static
   shapes and runs fully on the Hexagon NPU (~23 ms/inference on the IQ-9075).
@@ -37,9 +30,7 @@ description: |
       snap set ai-vision-ros2 input-image-topic=/my/camera/image_raw
       snap set ai-vision-ros2 score-threshold=0.1
 
-  Requires the Ubuntu-on-Qualcomm IoT stack on the target and the custom-device
-  interface connected for NPU (fastrpc) access. Check status with
-  `snap services ai-vision-ros2` / `snap logs ai-vision-ros2`.
+  Check status with `snap services ai-vision-ros2` / `snap logs ai-vision-ros2`.
 
 grade: stable
 confinement: strict
@@ -50,8 +41,8 @@ platforms:
     build-on: [arm64]
     build-for: [arm64]
 
-# Qualcomm IoT PPA: provides the fastrpc userspace driver (qcom-fastrpc1) and
-# the Adreno OpenCL userspace driver, matching the on-device stack.
+# Qualcomm IoT PPA: provides the fastrpc userspace driver (qcom-fastrpc1),
+# matching the on-device stack.
 package-repositories:
   - type: apt
     formats: [deb]
@@ -62,26 +53,14 @@ package-repositories:
     url: https://ppa.launchpadcontent.net/ubuntu-qcom-iot/qcom-ppa/ubuntu
     architectures: [arm64]
 
-# Provider side: a custom-device slot naming the Qualcomm accelerator nodes.
-# custom-device's UDevConnectedPlug udev-tags the device nodes, which is what
-# the mandatory core24 device cgroup requires (system-files/hardware-observe
-# cannot do this). /dev/fastrpc-cdsp (Hexagon DSP / NPU fastrpc channel) is the
-# node the HTP backend needs -- it is owned fastrpc:fastrpc with others=r, and
-# the confined root daemon opens it O_RDONLY (which libcdsprpc uses), so no
-# udev/permission change is required. /dev/kgsl-3d0 (Adreno GPU) is kept for
-# the optional GPU backend.
+# Provider side: a custom-device slot naming the Qualcomm NPU device nodes.
 slots:
   qcom-accel:
     interface: custom-device
     custom-device: qcom-accel
     devices:
-      - /dev/kgsl-3d0
       - /dev/fastrpc-cdsp
       - /dev/fastrpc-cdsp1
-    files:
-      read:
-        - /sys/class/kgsl/kgsl-3d0/gpu_busy_percentage
-        - /sys/class/kgsl/kgsl-3d0/gpuclk
 
 plugs:
   qcom-accel-plug:
@@ -98,17 +77,14 @@ apps:
     restart-delay: 5s
     environment:
       # fastrpc userspace (libcdsprpc.so, dlopen'd by libQnnHtp.so to reach the
-      # Hexagon DSP) and the Adreno OpenCL driver live in the multiarch dir;
-      # lapack/blas (cv2) subdirs are prepended by the launcher. The QNN
-      # provider + backend libs (incl. the Hexagon skels) ship inside the
-      # onnxruntime-qnn wheel; ADSP_LIBRARY_PATH (set in the launcher) points
-      # the DSP loader at them.
+      # Hexagon DSP) lives in the multiarch dir; lapack/blas (cv2) subdirs are
+      # prepended by the launcher. The QNN provider + backend libs (incl. the
+      # Hexagon skels) ship inside the onnxruntime-qnn wheel; ADSP_LIBRARY_PATH
+      # (set in the launcher) points the DSP loader at them.
       LD_LIBRARY_PATH: "$SNAP/usr/lib:$SNAP/usr/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH"
     plugs:
       - network
       - network-bind
-      - hardware-observe
-      - opengl
       - qcom-accel-plug
 
 hooks:
@@ -124,16 +100,15 @@ parts:
       - libgomp1
       - liblapack3
       - libblas3
+      - qcom-fastrpc1
+      - qcom-fastrpc-dev
     build-packages:
       - python3-pip
     # colcon builds the ROS package; then install the Python inference deps
     # (ONNX Runtime with the QNN plugin execution provider) plus transformers
     # (for the CLIP text tokenizer ONLY -- no torch) into the Debian
     # dist-packages path. Versions are PINNED: onnxruntime-qnn 2.2.0 bundles
-    # QAIRT 2.46, which matches the on-device Qualcomm SDK on this board -- a
-    # mismatched QAIRT makes the QNN backend reject this SoC. The Qualcomm
-    # AI-Hub OWL-ViT (validated with QAIRT 2.45) loads and runs fully on the
-    # Hexagon NPU under 2.46. cp312 aarch64 -> requires core24's Python 3.12.
+    # QAIRT 2.46, which matches the on-device Qualcomm SDK on this board.
     override-build: |
       craftctl default
       pip3 install \
@@ -145,19 +120,6 @@ parts:
         "onnxruntime==1.24.4" \
         "onnxruntime-qnn==2.2.0" \
         "transformers"
-
-  # The onnxruntime-qnn wheel (installed in the owl-demo part) already ships the
-  # QNN provider library AND the QNN backend libs (libQnnHtp + Hexagon skels,
-  # libQnnGpu, ...). At runtime libQnnHtp.so dlopen()s the fastrpc userspace
-  # driver to reach the Hexagon DSP -- that lib (libcdsprpc.so, from
-  # qcom-fastrpc1) is NOT in the wheel and must be staged from the Qualcomm IoT
-  # PPA so it matches the on-device DSP. qcom-fastrpc-dev provides the
-  # unversioned .so symlink some loaders look for.
-  qnn-runtime:
-    plugin: nil
-    stage-packages:
-      - qcom-fastrpc1
-      - qcom-fastrpc-dev
 
   # Qualcomm AI-Hub OWL-ViT model, w8a16-quantised and validated for the Hexagon
   # NPU. ViT-B/32 CLIP backbone, static shapes (image 1x3x768x768 uint16, text

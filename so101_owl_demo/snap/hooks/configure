@@ -63,9 +63,16 @@ SCORE_DEQUANT_ZERO_POINT="$(get_number score-dequant-zero-point 0)"
 # Comma-separated ORT providers in priority order. Default runs OWL-ViT on the
 # Qualcomm Hexagon NPU via the QNN HTP backend, falling back to CPU for
 # unsupported nodes. qnn-backend-path selects the QNN accelerator:
-#   htp = Hexagon NPU (default), gpu = Adreno, cpu = QNN reference CPU
+#   htp = Hexagon NPU (default), cpu = QNN reference CPU
 EXECUTION_PROVIDERS="$(get execution-providers "QNNExecutionProvider,CPUExecutionProvider")"
 QNN_BACKEND_PATH="$(get qnn-backend-path "htp")"
+case "$QNN_BACKEND_PATH" in
+  htp|cpu) ;;
+  *)
+    echo "ai-vision-ros2 (qualcomm owl): invalid qnn-backend-path '$QNN_BACKEND_PATH'; use htp or cpu" >&2
+    exit 1
+    ;;
+esac
 
 # EPContext (QNN context-binary) cache. Persisting the compiled HTP context in
 # writable $SNAP_COMMON turns OWL-ViT's ~40 s first-run graph compile into a
