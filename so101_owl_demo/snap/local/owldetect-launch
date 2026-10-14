@@ -3,7 +3,7 @@
 #
 # Entry point for the `perception` daemon app (Qualcomm / QNN OWL-ViT variant).
 #   * LD_LIBRARY_PATH already carries the QNN backend libs ($SNAP/usr/lib) and
-#     the fastrpc / Adreno drivers ($SNAP/usr/lib/aarch64-linux-gnu), set in the
+#     the fastrpc userspace driver ($SNAP/usr/lib/aarch64-linux-gnu), set in the
 #     app's environment in snapcraft.yaml; here we prepend the lapack/blas dirs
 #     (cv2) which are NOT on the default search path.
 #   * ONNX Runtime's QNNExecutionProvider dispatches to the Hexagon NPU via the

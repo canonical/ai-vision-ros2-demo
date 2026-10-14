@@ -81,10 +81,16 @@ LOG_SEVERITY_LEVEL="$(get_number log-severity-level 2)"
 # model on the Qualcomm Hexagon NPU via the QNN HTP backend, falling back to
 # CPU for unsupported nodes. qnn-backend-path selects the QNN accelerator:
 #   htp = Hexagon NPU (default, ~12x faster than CPU on this board)
-#   gpu = Adreno GPU (works but slower than CPU for this fp32 model)
 #   cpu = QNN reference CPU
 EXECUTION_PROVIDERS="$(get execution-providers "QNNExecutionProvider,CPUExecutionProvider")"
 QNN_BACKEND_PATH="$(get qnn-backend-path "htp")"
+case "$QNN_BACKEND_PATH" in
+  htp|cpu) ;;
+  *)
+    echo "ai-vision-ros2 (qualcomm depth): invalid qnn-backend-path '$QNN_BACKEND_PATH'; use htp or cpu" >&2
+    exit 1
+    ;;
+esac
 
 # EPContext (QNN context-binary) cache. Persisting the compiled HTP context in
 # writable $SNAP_COMMON turns the first-run graph compile (~12 s for the AI-Hub

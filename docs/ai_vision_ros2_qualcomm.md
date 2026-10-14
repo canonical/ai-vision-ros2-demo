@@ -62,7 +62,7 @@ Other keys: `input-image-topic`, `use-compressed` (default `true` — subscribe
 to `<input-image-topic>/compressed`, `sensor_msgs/CompressedImage`, instead of
 raw `Image`), `output-image-topic`,
 `output-detections-topic`, `iou-threshold`, `max-detections`, `min-period-s`,
-`intra-op-threads`, `qnn-backend-path` (`htp`/`gpu`/`cpu`),
+`intra-op-threads`, `qnn-backend-path` (`htp`/`cpu`),
 `qnn-context-cache-path`, `execution-providers`, `log-severity-level`,
 `stop-topic`, `roi`, `min-overlap-ratio`, `frames-to-block`, `frames-to-clear`,
 plus `namespace`/`node-name`/`ros-domain-id`/`rmw-implementation`. The uint16
@@ -117,7 +117,7 @@ See the depth model card / `so101_depth_demo/README.md` for its config keys.
 
 ### Device access (strict confinement)
 
-The snaps declare a `custom-device` slot (`qcom-accel`) naming the accelerator
+The snaps declare a `custom-device` slot (`qcom-accel`) naming the NPU device
 nodes and a matching plug. `custom-device` udev-tags the nodes, which is what
 the mandatory core24 device cgroup requires:
 
@@ -125,8 +125,6 @@ the mandatory core24 device cgroup requires:
   owned `fastrpc:fastrpc` with `others=r`, and the confined root daemon opens it
   **O_RDONLY** (which `libcdsprpc` uses), so **no udev/permission change is
   required**.
-- `/dev/kgsl-3d0` (Adreno GPU) — kept for the optional `qnn-backend-path=gpu`
-  backend.
 
 For a store install the interface auto-connects; for a local `--dangerous`
 install connect it manually:

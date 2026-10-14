@@ -3,28 +3,22 @@ base: core24
 version: '1.0.0-depth-qualcomm'
 summary: Depth Anything V2 on Qualcomm Hexagon NPU / QNN (ROS 2 Jazzy)
 description: |
-  Accelerated monocular depth visualisation for the SO-101 arm, on a Qualcomm
-  IQ-9075 EVK (or similar QRB/Snapdragon board running the Ubuntu-on-Qualcomm
-  IoT stack). Subscribes to a ROS 2 image topic, runs Depth Anything V2 (Small)
+  Accelerated monocular depth visualisation, on a Qualcomm
+  IQ-9075 EVK (or similar QRB/Snapdragon board).
+  Subscribes to a ROS 2 image topic, runs Depth Anything V2 (Small)
   with ONNX Runtime's QNN execution provider on the Hexagon NPU, and republishes
   a colorised relative-depth image (for viewing, with the safety ROI/trigger
   overlaid), a raw normalised depth map (32FC1, for other machine consumers),
-  and a std_msgs/Bool protective-stop signal computed directly by this node
-  (ROI proximity + hysteresis debounce).
+  and a std_msgs/Bool protective-stop signal computed directly by this node.
 
   This is the Qualcomm variant of the "ai-vision-ros2" snap, published on the
-  latest/qualcomm/* channels. It is the Qualcomm counterpart to the CPU variant
-  on latest/stable (depth, so101_depth_demo) and the NVIDIA/Jetson variant on
-  latest/nvidia/* (TensorRT) -- same snap name, same `perception` service,
-  same `snap set` keys, so the channel-swap story is preserved per
-  architecture.
+  latest/qualcomm/* channels.
 
   ONNX Runtime's QNNExecutionProvider dispatches inference to the Hexagon NPU
   (HTP backend) over fastrpc, ~12x faster than CPU, falling back to CPU for
-  unsupported nodes. The Adreno GPU backend is selectable (qnn-backend-path=gpu)
-  but is slower than CPU for this fp32 model. The bundled onnxruntime-qnn
-  (QAIRT 2.46) is version-matched to the board's on-device Qualcomm SDK, and the
-  model's input shape is fixed at build time so QNN can finalise the graph.
+  unsupported nodes. The bundled onnxruntime-qnn (QAIRT 2.46) is
+  version-matched to the board's on-device Qualcomm SDK, and the model's
+  input shape is fixed at build time so QNN can finalise the graph.
 
   Runs as an always-on daemon. Configure with `snap set`, e.g.:
 
@@ -32,9 +26,7 @@ description: |
       snap set ai-vision-ros2 output-image-topic=/camera/depth/visualization
       snap set ai-vision-ros2 output-depth-topic=/perception/depth
 
-  Requires the Ubuntu-on-Qualcomm IoT stack on the target and the custom-device
-  interface connected for NPU (fastrpc) access. Check status with
-  `snap services ai-vision-ros2` / `snap logs ai-vision-ros2`.
+  Check status with `snap services ai-vision-ros2` / `snap logs ai-vision-ros2`.
 
 grade: stable
 confinement: strict
@@ -45,8 +37,8 @@ platforms:
     build-on: [arm64]
     build-for: [arm64]
 
-# Qualcomm IoT PPA: provides the QNN SDK runtime libraries (qairt-libs) and the
-# Adreno OpenCL userspace driver (qcom-adreno1), matching the on-device stack.
+# Qualcomm IoT PPA: provides the fastrpc userspace driver (qcom-fastrpc1),
+# matching the on-device stack.
 package-repositories:
   - type: apt
     formats: [deb]
@@ -57,26 +49,14 @@ package-repositories:
     url: https://ppa.launchpadcontent.net/ubuntu-qcom-iot/qcom-ppa/ubuntu
     architectures: [arm64]
 
-# Provider side: a custom-device slot naming the Qualcomm accelerator nodes.
-# custom-device's UDevConnectedPlug udev-tags the device nodes, which is what
-# the mandatory core24 device cgroup requires (system-files/hardware-observe
-# cannot do this). /dev/fastrpc-cdsp (Hexagon DSP / NPU fastrpc channel) is the
-# node the HTP backend needs -- it is owned fastrpc:fastrpc with others=r, and
-# the confined root daemon opens it O_RDONLY (which libcdsprpc uses), so no
-# udev/permission change is required. /dev/kgsl-3d0 (Adreno GPU) is kept for
-# the optional GPU backend.
+# Provider side: a custom-device slot naming the Qualcomm NPU device nodes.
 slots:
   qcom-accel:
     interface: custom-device
     custom-device: qcom-accel
     devices:
-      - /dev/kgsl-3d0
       - /dev/fastrpc-cdsp
       - /dev/fastrpc-cdsp1
-    files:
-      read:
-        - /sys/class/kgsl/kgsl-3d0/gpu_busy_percentage
-        - /sys/class/kgsl/kgsl-3d0/gpuclk
 
 plugs:
   qcom-accel-plug:
@@ -93,17 +73,14 @@ apps:
     restart-delay: 5s
     environment:
       # fastrpc userspace (libcdsprpc.so, dlopen'd by libQnnHtp.so to reach the
-      # Hexagon DSP) and the Adreno OpenCL driver live in the multiarch dir;
-      # lapack/blas (cv2) subdirs are prepended by the launcher. The QNN
-      # provider + backend libs (incl. the Hexagon skels) ship inside the
-      # onnxruntime-qnn wheel; ADSP_LIBRARY_PATH (set in the launcher) points
-      # the DSP loader at them.
+      # Hexagon DSP) lives in the multiarch dir; lapack/blas (cv2) subdirs are
+      # prepended by the launcher. The QNN provider + backend libs (incl. the
+      # Hexagon skels) ship inside the onnxruntime-qnn wheel; ADSP_LIBRARY_PATH
+      # (set in the launcher) points the DSP loader at them.
       LD_LIBRARY_PATH: "$SNAP/usr/lib:$SNAP/usr/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH"
     plugs:
       - network
       - network-bind
-      - hardware-observe
-      - opengl
       - qcom-accel-plug
 
 hooks:
@@ -119,15 +96,15 @@ parts:
       - libgomp1
       - liblapack3
       - libblas3
+      - qcom-fastrpc1
+      - qcom-fastrpc-dev
     build-packages:
       - python3-pip
     # colcon builds the ROS package; then install the Python inference deps
     # (ONNX Runtime with the QNN plugin execution provider) into the Debian
     # dist-packages path. Versions are PINNED: onnxruntime-qnn 2.2.0 bundles
     # QAIRT 2.46, which matches the on-device Qualcomm SDK (qairt-*/qcom-* debs)
-    # on this board -- a mismatched QAIRT (e.g. the newer 2.5.0/QAIRT-2.49
-    # wheel) makes the QNN backend reject this SoC ("unsupported platform").
-    # cp312 aarch64 (manylinux_2_34) -> requires core24's Python 3.12.
+    # on this board.
     override-build: |
       craftctl default
       pip3 install \
@@ -138,19 +115,6 @@ parts:
         "opencv-python-headless" \
         "onnxruntime==1.24.4" \
         "onnxruntime-qnn==2.2.0"
-
-  # The onnxruntime-qnn wheel (installed in the depth-demo part) already ships
-  # the QNN provider library AND the QNN backend libs (libQnnHtp + Hexagon
-  # skels, libQnnGpu, ...). At runtime libQnnHtp.so dlopen()s the fastrpc
-  # userspace driver to reach the Hexagon DSP -- that lib (libcdsprpc.so, from
-  # qcom-fastrpc1) is NOT in the wheel and must be staged from the Qualcomm IoT
-  # PPA so it matches the on-device DSP. qcom-fastrpc-dev provides the
-  # unversioned .so symlink some loaders look for.
-  qnn-runtime:
-    plugin: nil
-    stage-packages:
-      - qcom-fastrpc1
-      - qcom-fastrpc-dev
 
   # Model weights bundled directly into this snap. The upstream ONNX has fully
   # dynamic input dims (batch, height, width); QNN cannot finalise a dynamic
