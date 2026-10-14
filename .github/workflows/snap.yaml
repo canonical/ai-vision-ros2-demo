@@ -1,0 +1,23 @@
+name: snap
+
+on:
+  push:
+    branches: ['qualcomm', 'qualcomm-**']
+  pull_request:
+    branches: ['qualcomm']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snap:
+    permissions:
+      contents: read
+    uses: canonical/robotics-actions-workflows/.github/workflows/snap.yaml@main
+    with:
+      runs-on: '["ubuntu-24.04-arm"]'
+      snapcraft-source-subdir: '["so101_depth_demo", "so101_owl_demo"]'
+      snapcraft-enable-experimental-extensions: true
+    # secrets:
+    #   snapstore-login: ${{ secrets.SNAPSTORE_LOGIN }}
