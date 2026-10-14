@@ -3,23 +3,16 @@ base: core22
 version: '1.0.0-owl-nvidia'
 summary: NanoOWL (OWL-ViT) detection, NVIDIA Jetson TensorRT
 description: |
-  GPU open-vocabulary object detection for the SO-101 arm, on an NVIDIA Jetson
-  (Orin, JetPack 6.x). Subscribes to a ROS 2 image topic, runs NanoOWL
-  (OWL-ViT) for a configurable TEXT PROMPT (default "a hand") with its image
-  encoder accelerated by a TensorRT engine (torch2trt), and republishes an
-  annotated visualisation image (for viewing, with the safety ROI/trigger
-  overlaid), machine-readable detections (vision_msgs/Detection2DArray), and a
-  std_msgs/Bool protective-stop signal computed directly by this node (ROI
-  overlap on the prompt-matched detections + hysteresis debounce).
+  GPU open-vocabulary object detection, on an NVIDIA Jetson (Orin, JetPack
+  6.x). Subscribes to a ROS 2 image topic, runs NanoOWL (OWL-ViT) for a
+  configurable TEXT PROMPT (default "a hand") with its image encoder
+  accelerated by a TensorRT engine (torch2trt), and republishes an annotated
+  visualisation image (for viewing, with the safety ROI/trigger overlaid),
+  machine-readable detections (vision_msgs/Detection2DArray), and a
+  std_msgs/Bool protective-stop signal computed directly by this node.
 
   This is the NanoOWL variant of the "ai-vision-ros2" snap, published on the
-  latest/nvidia/edge channel. It is the open-vocabulary sibling of the depth
-  variant on latest/nvidia/stable (Depth Anything V2, so101_depth_demo) -- same
-  snap name, same `perception` service, same protective-stop contract, so you
-  swap the whole behaviour with a channel refresh and zero ROS-side restart:
-
-      snap refresh ai-vision-ros2 --channel=nvidia/stable   # -> depth proximity
-      snap refresh ai-vision-ros2 --channel=nvidia/edge      # -> NanoOWL prompt
+  latest/nvidia/edge channel.
 
   The OWL-ViT weights are downloaded from Hugging Face on first run (cached in
   $SNAP_COMMON/hf), and the TensorRT image-encoder engine is built ON-DEVICE on
@@ -32,9 +25,7 @@ description: |
       snap set ai-vision-ros2 threshold=0.1
       snap set ai-vision-ros2 input-image-topic=/my/camera/image_raw
 
-  Requires JetPack 6.x on the target and the GPU interfaces connected (see
-  docs/ai_vision_ros2_nvidia.md). Check status with
-  `snap services ai-vision-ros2` / `snap logs ai-vision-ros2`.
+  Check status with `snap services ai-vision-ros2` / `snap logs ai-vision-ros2`.
 
 grade: stable
 confinement: strict
