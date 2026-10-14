@@ -14,10 +14,6 @@ jobs:
   snap:
     permissions:
       contents: read
-      # Required even though we don't enable `cleanup`: GitHub statically
-      # validates permissions for every nested job in the called reusable
-      # workflow (including the conditional `cleanup` job), regardless of
-      # whether its `if:` would actually let it run.
       actions: write
     uses: canonical/robotics-actions-workflows/.github/workflows/snap.yaml@main
     with:
