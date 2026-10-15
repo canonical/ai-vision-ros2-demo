@@ -1,0 +1,24 @@
+name: snap
+
+on:
+  push:
+    branches: ['nvidia', 'nvidia-**']
+  pull_request:
+    branches: ['nvidia']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snap:
+    permissions:
+      contents: read
+      actions: write
+    uses: canonical/robotics-actions-workflows/.github/workflows/snap.yaml@main
+    with:
+      runs-on: '["ubuntu-24.04-arm"]'
+      snapcraft-source-subdir: '["so101_depth_demo", "ai-vision-ros2-nanoowl-demo"]'
+      snapcraft-enable-experimental-extensions: true
+    # secrets:
+    #   snapstore-login: ${{ secrets.SNAPSTORE_LOGIN }}
