@@ -58,7 +58,7 @@ ros2 launch so101_owl_demo owl_demo.launch.py prompt:="a hand"
 | --- | --- | --- |
 | `input_image_topic` | `/static_camera/image_raw` | camera image base topic |
 | `use_compressed` | `true` | subscribe to `<input_image_topic>/compressed` (`sensor_msgs/CompressedImage`) instead of raw `Image` |
-| `prompt` | `a hand` | free-form text prompt to detect |
+| `prompt` | `a hand` | free-form text prompt to detect; comma-separated for multiple (e.g. `a hand,a cup`), one inference per prompt |
 | `prompt_topic` | `/perception/prompt` | live prompt update (String) |
 | `prompt_file` | `""` | polled file for live prompt update |
 | `score_threshold` | `0.1` | min sigmoid score to keep |

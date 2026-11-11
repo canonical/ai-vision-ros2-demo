@@ -81,6 +81,8 @@ apps:
     plugs:
       - network
       - network-bind
+      - hardware-observe
+      - opengl
       - qcom-accel-plug
 
 hooks:

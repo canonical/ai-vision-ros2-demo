@@ -49,7 +49,8 @@ Parameters:
   output_image_topic      (string) annotated visualisation topic to publish
   output_detections_topic (string) Detection2DArray topic to publish
   input_size              (int)    square model input size (default 768)
-  prompt                  (string) initial text prompt (default "a hand")
+  prompt                  (string) initial text prompt(s); comma-separated for
+                                   multiple queries (one inference each)
   prompt_topic            (string) String topic for live prompt updates
   prompt_file             (string) file polled for live prompt updates ("" = off)
   score_threshold         (float)  minimum sigmoid score to keep (default 0.1)
@@ -280,6 +281,7 @@ class OwlDetectNode(Node):
         self._input_ids = None
         self._attention_mask = None
         self._label = ""
+        self._labels = []
         self._apply_prompt(str(self.get_parameter("prompt").value))
         self._prompt_file_mtime = 0.0
 
@@ -427,27 +429,30 @@ class OwlDetectNode(Node):
     # ────────────────────────────────────────────────────────────────────────
 
     def _apply_prompt(self, text: str):
-        """Tokenise a new text prompt and cache its input_ids/attention_mask.
+        """Tokenise a new (comma-separated) text prompt and cache one
+        input_ids/attention_mask row per query.
 
         Cheap (~ms): only re-runs the CLIP tokenizer, never reloads the model.
         """
         text = (text or "").strip()
-        if not text:
+        labels = [p.strip() for p in text.split(",") if p.strip()]
+        if not labels:
             self.get_logger().warn("Ignoring empty prompt")
             return
         enc = self._tokenizer(
-            [text],
+            labels,
             padding="max_length",
             max_length=self._max_text_len,
             truncation=True,
             return_tensors="np",
         )
-        self._input_ids = enc["input_ids"].astype(np.int32).reshape(1, self._max_text_len)
+        self._input_ids = enc["input_ids"].astype(np.int32).reshape(-1, self._max_text_len)
         self._attention_mask = (
-            enc["attention_mask"].astype(np.int32).reshape(1, self._max_text_len)
+            enc["attention_mask"].astype(np.int32).reshape(-1, self._max_text_len)
         )
         self._label = text
-        self.get_logger().info(f"Prompt set to '{text}'")
+        self._labels = labels
+        self.get_logger().info(f"Prompt set to {labels}")
 
     def _prompt_cb(self, msg: String):
         self._apply_prompt(msg.data)
@@ -522,30 +527,39 @@ class OwlDetectNode(Node):
         return x
 
     def _infer(self, pixel_values: np.ndarray):
-        """Run one forward pass; return (boxes[576,4], scores[576]) dequantised.
+        """Run one forward pass per prompt query; return (boxes[N*576,4],
+        scores[N*576], label_ids[N*576]) dequantised.
 
+        The AI-Hub model's text input is static 1x16, so multiple queries are
+        run sequentially (one inference each) against the same image.
         Boxes are in model-input (SxS) pixel space, xyxy. Scores are sigmoid
         probabilities in [0,1].
         """
-        feed = {
-            self._pix_name: pixel_values,
-            self._ids_name: self._input_ids,
-            self._attn_name: self._attention_mask,
-        }
-        boxes_q, scores_q = self._session.run(self._out_names, feed)
-        boxes = boxes_q.astype(np.float32).reshape(-1, 4)
-        scores = scores_q.astype(np.float32).reshape(-1)
-        if self._box_scale > 0.0:
-            boxes = (boxes - self._box_zp) * self._box_scale
-        if self._score_scale > 0.0:
-            scores = (scores - self._score_zp) * self._score_scale
-        return boxes, scores
+        all_boxes, all_scores, all_labels = [], [], []
+        for i in range(self._input_ids.shape[0]):
+            feed = {
+                self._pix_name: pixel_values,
+                self._ids_name: self._input_ids[i:i + 1],
+                self._attn_name: self._attention_mask[i:i + 1],
+            }
+            boxes_q, scores_q = self._session.run(self._out_names, feed)
+            boxes = boxes_q.astype(np.float32).reshape(-1, 4)
+            scores = scores_q.astype(np.float32).reshape(-1)
+            if self._box_scale > 0.0:
+                boxes = (boxes - self._box_zp) * self._box_scale
+            if self._score_scale > 0.0:
+                scores = (scores - self._score_zp) * self._score_scale
+            all_boxes.append(boxes)
+            all_scores.append(scores)
+            all_labels.append(np.full(scores.shape[0], i, dtype=np.int32))
+        return np.concatenate(all_boxes), np.concatenate(all_scores), np.concatenate(all_labels)
 
-    def _postprocess(self, boxes, scores, orig_w: int, orig_h: int):
-        """Score-threshold, rescale to the original frame, and NMS."""
+    def _postprocess(self, boxes, scores, labels, orig_w: int, orig_h: int):
+        """Score-threshold, rescale to the original frame, and per-label NMS."""
         keep = scores >= self._score_threshold
         boxes = boxes[keep]
         scores = scores[keep]
+        labels = labels[keep]
         if boxes.shape[0] == 0:
             return []
 
@@ -555,11 +569,14 @@ class OwlDetectNode(Node):
         boxes[:, 0::2] = np.clip(boxes[:, 0::2], 0.0, orig_w)
         boxes[:, 1::2] = np.clip(boxes[:, 1::2], 0.0, orig_h)
 
+        # Shift each label's boxes apart so one NMS pass never suppresses
+        # across different prompts.
+        offset = (labels.astype(np.float32) * (max(orig_w, orig_h) + 1))[:, None]
         detections = []
-        for i in self._nms(boxes, scores, self._iou_threshold, self._max_det):
+        for i in self._nms(boxes + offset, scores, self._iou_threshold, self._max_det):
             x1, y1, x2, y2 = boxes[i]
             detections.append((float(x1), float(y1), float(x2), float(y2),
-                               float(scores[i]), 0))
+                               float(scores[i]), int(labels[i])))
         return detections
 
     @staticmethod
@@ -630,13 +647,14 @@ class OwlDetectNode(Node):
         msg = Detection2DArray()
         msg.header.stamp = stamp
         msg.header.frame_id = frame_id
-        for x1, y1, x2, y2, conf, _cls_id in detections:
+        for x1, y1, x2, y2, conf, cls_id in detections:
+            label = self._labels[cls_id]
             det = Detection2D()
             det.header.stamp = stamp
             det.header.frame_id = frame_id
 
             hyp = ObjectHypothesisWithPose()
-            hyp.hypothesis.class_id = self._label
+            hyp.hypothesis.class_id = label
             hyp.hypothesis.score = conf
             det.results.append(hyp)
 
@@ -647,7 +665,7 @@ class OwlDetectNode(Node):
             bbox.size_x = max(x2 - x1, 0.0)
             bbox.size_y = max(y2 - y1, 0.0)
             det.bbox = bbox
-            det.id = self._label
+            det.id = label
 
             msg.detections.append(det)
         self._det_pub.publish(msg)
@@ -655,11 +673,11 @@ class OwlDetectNode(Node):
     def _draw_and_publish_viz(self, bgr_frame, detections, stop_state, stamp, frame_id):
         canvas = bgr_frame.copy()
         color = (255, 128, 0)  # BGR
-        for x1, y1, x2, y2, conf, _cls_id in detections:
+        for x1, y1, x2, y2, conf, cls_id in detections:
             p1 = (int(x1), int(y1))
             p2 = (int(x2), int(y2))
             cv2.rectangle(canvas, p1, p2, color, 2)
-            text = f"{self._label} {conf:.2f}"
+            text = f"{self._labels[cls_id]} {conf:.2f}"
             (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
             cv2.rectangle(
                 canvas, (p1[0], max(p1[1] - th - 4, 0)), (p1[0] + tw + 2, p1[1]), color, -1
@@ -724,8 +742,8 @@ class OwlDetectNode(Node):
 
     def _process(self, bgr: np.ndarray, stamp, frame_id: str):
         h, w = bgr.shape[:2]
-        boxes, scores = self._infer(self._preprocess(bgr))
-        detections = self._postprocess(boxes, scores, w, h)
+        boxes, scores, labels = self._infer(self._preprocess(bgr))
+        detections = self._postprocess(boxes, scores, labels, w, h)
 
         stop_state, best_overlap = self._evaluate_stop(detections, w, h)
         self._stop_pub.publish(Bool(data=stop_state))
